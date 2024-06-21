@@ -1,0 +1,25 @@
+// https://jpaztech.github.io/blog/network/snat-options-for-azure-vm/
+Resources
+    | where type =~ 'microsoft.compute/virtualmachines'
+    | project vmId = tolower(tostring(id)), vmName = name
+    | join (Resources
+        | where type =~ 'microsoft.network/networkinterfaces'
+        | mv-expand ipconfig=properties.ipConfigurations
+        | project vmId = tolower(tostring(properties.virtualMachine.id)), privateIp = ipconfig.properties.privateIPAddress, publicIpId = tostring(ipconfig.properties.publicIPAddress.id), subnetId = tostring(ipconfig.properties.subnet.id), LBId = tostring(ipconfig.properties.loadBalancerBackendAddressPools)
+        | join kind=leftouter (Resources
+            | where type =~ 'microsoft.network/publicipaddresses'
+            | project publicIpId = id, publicIp = properties.ipAddress
+        ) on publicIpId
+            | join kind=leftouter (Resources
+                | where type == "microsoft.network/virtualnetworks"
+                | mvexpand subnets = properties.subnets
+                | project subnetId = tostring(subnets.id), RouteTableId = tostring(subnets.properties.routeTable.id), NatGatewayId = tostring(subnets.properties.natGateway.id)
+                | where string_size(RouteTableId) == 0 and string_size(NatGatewayId) == 0 //No UDR, No NATGW
+                ) on subnetId
+        | project-away publicIpId, publicIpId1
+        | where string_size(LBId) == 0 //No LB
+        | summarize privateIps = make_list(privateIp), publicIps = make_list(publicIp) , subnetIds = make_list(subnetId), LBIds = make_list(LBId) by vmId
+    ) on vmId
+    | project-away vmId1
+    | sort by vmName asc
+| where array_length(publicIps)==0 
